@@ -1,0 +1,124 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <HX711.h>
+
+#define LOADCELL_DOUT_PIN  3
+#define LOADCELL_SCK_PIN   2
+#define BUZZER_PIN          9
+
+LiquidCrystal_I2C lcd(0x27, 16, 4);  // LCD display (I2C address, width, height)
+
+HX711 scale;
+
+String incomingData = "";  // To store incoming serial data
+float expectedWeight = 0;  // To store expected weight from Python
+float actualWeight = 0;    // Measured weight from load cell
+int itemCount = 0;         // Number of items in the cart
+float totalPrice = 0;      // Total price of items in the cart
+
+unsigned long previousMillis = 0;  // Store last time measurement was taken
+const long interval = 200;         // Interval to update weight (in milliseconds)
+
+const int sampleCount = 10;        // Number of samples to average
+
+void setup() {
+  Serial.begin(9600);
+  lcd.init();
+  lcd.backlight();
+  
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+  scale.set_scale(-2280.f);  // Set your load cell scale factor
+  scale.tare();  // Reset the scale to 0
+  
+  pinMode(BUZZER_PIN, OUTPUT);
+  
+  // Initial LCD message for an empty cart
+  lcd.setCursor(0, 0);
+  lcd.print("Smart Cart Ready");
+  lcd.setCursor(0, 1);
+  lcd.print("No items added");
+  lcd.setCursor(0, 2);
+  lcd.print("Weight: 0.00kg");
+  lcd.setCursor(0, 3);
+  lcd.print("Total Price: 0.00");
+  delay(2000);
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+  // Check if it's time to update weight
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis;
+
+    // Measure weight from the load cell
+    actualWeight = getAverageWeight(sampleCount);  // Get the average weight from multiple samples
+
+    // If weight mismatch, trigger the buzzer
+    if (abs(actualWeight - expectedWeight) > 0.3) {  // Allowing a small tolerance of 0.3kg
+      digitalWrite(BUZZER_PIN, HIGH);  // Turn on buzzer
+    } else {
+      digitalWrite(BUZZER_PIN, LOW);   // Turn off buzzer
+    }
+
+    // Update the display with the new values
+    updateDisplay();
+    delay(1000);
+  }
+
+  // Check if data is available in serial
+  if (Serial.available() > 0) {
+    incomingData = Serial.readStringUntil('\n');
+    Serial.println(incomingData);  // Debugging line to print the incoming data
+    
+    parseData(incomingData);  // Parse incoming data
+  }
+}
+
+// Function to get the average weight from multiple samples
+float getAverageWeight(int numSamples) {
+  float total = 0;
+  for (int i = 0; i < numSamples; i++) {
+    total += scale.get_units(1);  // Read one sample at a time
+    delay(10);  // Small delay to avoid rapid fluctuations
+  }
+  return total / numSamples;  // Return the average weight
+}
+
+// Function to parse the incoming data from Python
+void parseData(String data) {
+  // Example format from Python: <ITEM:Milk;PRICE:100.00;WEIGHT:2.00;COUNT:3>
+  int itemStart = data.indexOf("ITEM:") + 5;
+  int itemEnd = data.indexOf(";", itemStart);
+  String itemName = data.substring(itemStart, itemEnd);
+
+  int priceStart = data.indexOf("PRICE:") + 6;
+  int priceEnd = data.indexOf(";", priceStart);
+  totalPrice = data.substring(priceStart, priceEnd).toFloat();
+
+  int weightStart = data.indexOf("WEIGHT:") + 7;
+  int weightEnd = data.indexOf(";", weightStart);
+  expectedWeight = data.substring(weightStart, weightEnd).toFloat();
+
+  int countStart = data.indexOf("COUNT:") + 6;
+  itemCount = data.substring(countStart).toInt();
+
+  // For debugging purposes
+  Serial.print("Item: "); Serial.println(itemName);
+  Serial.print("Price: "); Serial.println(totalPrice);
+  Serial.print("Expected Weight: "); Serial.println(expectedWeight);
+  Serial.print("Item Count: "); Serial.println(itemCount);
+}
+
+// Function to update the display
+void updateDisplay() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Item Count: " + String(itemCount));
+  lcd.setCursor(0, 1);
+  lcd.print("Total Price: " + String(totalPrice));
+  lcd.setCursor(0, 2);
+  lcd.print("Act Weight: " + String(actualWeight, 2) + "kg");  // Display actual measured weight
+  lcd.setCursor(0, 3);
+  lcd.print("Exp Weight: " + String(expectedWeight, 2) + "kg");
+}
